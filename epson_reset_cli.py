@@ -7,41 +7,78 @@ import argparse
 import sys
 import time
 from epson_reset import (
+    validate_ip, is_supported_model, SUPPORTED_MODELS,
     check_snmp_connectivity, get_printer_model,
     read_eeprom, write_eeprom,
-    WASTE_INK_ADDRS, MAIN_WASTE_ADDRS, BORDERLESS_WASTE_ADDRS,
+    WASTE_INK_RESET, MAIN_WASTE_ADDRS, BORDERLESS_WASTE_ADDRS,
     MAIN_WASTE_DIVIDER, BORDERLESS_WASTE_DIVIDER, MAINTENANCE_THRESHOLD,
 )
 
 
 def read_counters(ip):
-    main_bytes = [read_eeprom(ip, a) or 0 for a in MAIN_WASTE_ADDRS]
-    border_bytes = [read_eeprom(ip, a) or 0 for a in BORDERLESS_WASTE_ADDRS]
+    main_bytes = []
+    failed = False
+    for a in MAIN_WASTE_ADDRS:
+        v = read_eeprom(ip, a)
+        if v is None:
+            print(f"  WARNING: EEPROM[{a}] read failed")
+            failed = True
+            main_bytes.append(0)
+        else:
+            main_bytes.append(v)
+
+    border_bytes = []
+    for a in BORDERLESS_WASTE_ADDRS:
+        v = read_eeprom(ip, a)
+        if v is None:
+            failed = True
+            border_bytes.append(0)
+        else:
+            border_bytes.append(v)
+
     main_value = main_bytes[0] + (main_bytes[1] << 8) + (main_bytes[2] << 16)
     border_value = border_bytes[0] + (border_bytes[1] << 8) + (border_bytes[2] << 16)
     maint1 = read_eeprom(ip, 54)
     maint2 = read_eeprom(ip, 55)
-    return main_value, border_value, maint1, maint2
+    if maint1 is None or maint2 is None:
+        failed = True
+    return main_value, border_value, maint1, maint2, failed
 
 
 def main():
     parser = argparse.ArgumentParser(description="Epson EcoTank Waste Ink Pad Reset")
-    parser.add_argument("--ip", required=True, help="Printer IP address")
+    parser.add_argument("--ip", required=True, help="Printer IP address (e.g. 192.168.1.100)")
     parser.add_argument("--reset", action="store_true", help="Reset counters (default: read only)")
     parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+    parser.add_argument("--force", action="store_true", help="Skip model check (dangerous)")
     args = parser.parse_args()
 
-    ip = args.ip
+    # Validate IP
+    ip, err = validate_ip(args.ip)
+    if err:
+        print(f"ERROR: {err}")
+        sys.exit(1)
+
     print(f"Connecting to {ip}...")
 
     if not check_snmp_connectivity(ip):
-        print(f"ERROR: No response from {ip}. Check IP and network.")
+        print(f"ERROR: No response from {ip}.")
+        print("Check: printer is on, connected to WiFi, UDP port 161 not blocked.")
         sys.exit(1)
 
     model = get_printer_model(ip)
     print(f"Printer: {model or 'Unknown'}")
 
-    main_value, border_value, maint1, maint2 = read_counters(ip)
+    # Model check
+    if model and not is_supported_model(model):
+        print(f"\nWARNING: {model} is not a tested model!")
+        print(f"Supported: {', '.join(SUPPORTED_MODELS)}")
+        print("EEPROM addresses may differ. Proceeding could damage your printer.")
+        if not args.force:
+            print("Use --force to override this check.")
+            sys.exit(1)
+
+    main_value, border_value, maint1, maint2, read_failed = read_counters(ip)
     main_pct = main_value / MAIN_WASTE_DIVIDER
     border_pct = border_value / BORDERLESS_WASTE_DIVIDER
     is_over = maint1 is not None and maint1 > MAINTENANCE_THRESHOLD
@@ -52,6 +89,9 @@ def main():
     print(f"  Maintenance 1st:  {maint1} (threshold: {MAINTENANCE_THRESHOLD})")
     print(f"  Maintenance 2nd:  {maint2} (threshold: {MAINTENANCE_THRESHOLD})")
     print(f"  Status:           {'*** OVER LIMIT ***' if is_over else 'OK'}")
+
+    if read_failed:
+        print("\n  WARNING: Some reads failed. Values may be inaccurate.")
 
     if not args.reset:
         print("\nRun with --reset to reset the counters.")
@@ -65,7 +105,7 @@ def main():
 
     print("\nResetting...")
     success = True
-    for addr, (label, value) in WASTE_INK_ADDRS.items():
+    for addr, label, value in WASTE_INK_RESET:
         result = write_eeprom(ip, addr, value)
         status = "OK" if result is True else "FAIL" if result is False else "NO RESP"
         print(f"  EEPROM[{addr:3d}] = {value:3d} ... {status}  ({label})")
@@ -75,7 +115,7 @@ def main():
 
     print("\nVerifying...")
     time.sleep(1)
-    main_value, border_value, maint1, maint2 = read_counters(ip)
+    main_value, border_value, maint1, maint2, _ = read_counters(ip)
 
     if success and main_value == 0 and maint1 == 94:
         print("\nRESET SUCCESSFUL!")

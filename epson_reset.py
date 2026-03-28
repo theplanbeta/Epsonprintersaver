@@ -5,6 +5,7 @@ Resets waste ink counters on Epson ET-2720/2721/2700 series printers over WiFi.
 
 No special drivers or USB connection needed - works over your local network via SNMP.
 """
+import ipaddress
 import socket
 import struct
 import re
@@ -21,19 +22,22 @@ WRITE_KEY = b'Maribaya'
 BASE_OID = "1.3.6.1.4.1.1248.1.2.2.44.1.1.2.1"
 SNMP_PORT = 161
 
+SUPPORTED_MODELS = ["ET-2720", "ET-2721", "ET-2700"]
+
 # Waste ink EEPROM addresses and reset values
-WASTE_INK_ADDRS = {
-    48: ("Main waste counter (byte 0)", 0),
-    49: ("Main waste counter (byte 1)", 0),
-    47: ("Main waste counter (byte 2)", 0),
-    50: ("Borderless waste counter (byte 0)", 0),
-    51: ("Borderless waste counter (byte 1)", 0),
-    52: ("Counter store (byte 0)", 0),
-    53: ("Counter store (byte 1)", 0),
-    54: ("Maintenance level (1st)", 94),
-    55: ("Maintenance level (2nd)", 94),
-    28: ("Auxiliary counter", 0),
-}
+# Ordered so maintenance level bytes (the lock gate) are written LAST
+WASTE_INK_RESET = [
+    (48, "Main waste counter (byte 0)", 0),
+    (49, "Main waste counter (byte 1)", 0),
+    (47, "Main waste counter (byte 2)", 0),
+    (50, "Borderless waste counter (byte 0)", 0),
+    (51, "Borderless waste counter (byte 1)", 0),
+    (52, "Counter store (byte 0)", 0),
+    (53, "Counter store (byte 1)", 0),
+    (28, "Auxiliary counter", 0),
+    (54, "Maintenance level (1st)", 94),
+    (55, "Maintenance level (2nd)", 94),
+]
 
 # Waste ink counter composition
 MAIN_WASTE_ADDRS = [48, 49, 47]      # byte0, byte1, byte2
@@ -43,12 +47,37 @@ BORDERLESS_WASTE_DIVIDER = 34.15
 MAINTENANCE_THRESHOLD = 94
 
 
+# ─── Input Validation ────────────────────────────────────────────────────────
+
+def validate_ip(ip_str):
+    """Validate IP is a private IPv4 address. Returns (ip_str, error_msg)."""
+    try:
+        addr = ipaddress.IPv4Address(ip_str)
+    except (ipaddress.AddressValueError, ValueError):
+        return None, f"'{ip_str}' is not a valid IPv4 address."
+    if addr.is_multicast:
+        return None, "Multicast addresses are not allowed."
+    if addr.is_loopback:
+        return None, "Loopback addresses are not allowed."
+    if str(addr) in ("0.0.0.0", "255.255.255.255"):
+        return None, "Broadcast addresses are not allowed."
+    if not addr.is_private:
+        return None, (f"{addr} is a public IP. This tool is for local "
+                      f"network printers only (e.g. 192.168.x.x).")
+    return str(addr), None
+
+
+def is_supported_model(model_str):
+    """Check if the detected model is in the supported list."""
+    if not model_str:
+        return False
+    for m in SUPPORTED_MODELS:
+        if m in model_str:
+            return True
+    return False
+
+
 # ─── SNMP / EEPROM Protocol ──────────────────────────────────────────────────
-
-def caesar(key):
-    """Apply Caesar cipher to write key."""
-    return [0 if b == 0 else b + 1 for b in key]
-
 
 def epctrl_snmp_oid(command, payload):
     """Build Epson control OID with command and payload."""
@@ -67,7 +96,7 @@ def eeprom_write_oid(addr, value):
     """Build OID for EEPROM write at given address."""
     return epctrl_snmp_oid("||", [
         READ_KEY[0], READ_KEY[1], 66, 189, 33, addr % 256, addr // 256, value
-    ] + caesar(WRITE_KEY))
+    ] + [0 if b == 0 else b + 1 for b in WRITE_KEY])
 
 
 def encode_oid(oid_str):
@@ -121,11 +150,11 @@ def snmp_query(ip, pkt, timeout=5):
     """Send SNMP packet and return response."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
-    sock.sendto(pkt, (ip, SNMP_PORT))
     try:
+        sock.sendto(pkt, (ip, SNMP_PORT))
         data, _ = sock.recvfrom(4096)
         return data
-    except socket.timeout:
+    except (socket.timeout, socket.gaierror, OSError):
         return None
     finally:
         sock.close()
@@ -144,7 +173,6 @@ def read_eeprom(ip, addr):
 
 def write_eeprom(ip, addr, value):
     """Write a single byte to printer EEPROM. Returns True/False/None."""
-    # Epson uses SNMP GET (not SET) for writes - the command is encoded in the OID
     resp = snmp_query(ip, build_snmp_get(eeprom_write_oid(addr, value)))
     if resp:
         text = resp.decode('ascii', errors='replace')
@@ -180,14 +208,15 @@ class EpsonResetApp:
         self.root.title("Epson EcoTank Ink Pad Reset")
         self.root.resizable(False, False)
 
-        # Try to set icon (won't fail if not available)
         try:
             self.root.iconbitmap(default='')
         except Exception:
             pass
 
-        self.printer_ip = tk.StringVar(value="192.168.2.200")
+        self.printer_ip = tk.StringVar(value="")
         self.is_running = False
+        self._lock = threading.Lock()
+        self._detected_model = None
 
         self._build_ui()
         self.root.after(100, self._center_window)
@@ -201,11 +230,9 @@ class EpsonResetApp:
         self.root.geometry(f"+{x}+{y}")
 
     def _build_ui(self):
-        # Main frame
         main = ttk.Frame(self.root, padding=20)
         main.grid(sticky="nsew")
 
-        # Title
         title = ttk.Label(main, text="Epson EcoTank Ink Pad Reset",
                           font=("Segoe UI", 16, "bold"))
         title.grid(row=0, column=0, columnspan=3, pady=(0, 5))
@@ -214,42 +241,41 @@ class EpsonResetApp:
                              font=("Segoe UI", 10), foreground="gray")
         subtitle.grid(row=1, column=0, columnspan=3, pady=(0, 15))
 
-        # IP input
         ip_frame = ttk.LabelFrame(main, text="Printer Connection", padding=10)
         ip_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 10))
 
         ttk.Label(ip_frame, text="Printer IP:").grid(row=0, column=0, padx=(0, 5))
-        ip_entry = ttk.Entry(ip_frame, textvariable=self.printer_ip, width=20,
-                             font=("Consolas", 11))
-        ip_entry.grid(row=0, column=1, padx=(0, 10))
+        self.ip_entry = ttk.Entry(ip_frame, textvariable=self.printer_ip, width=20,
+                                  font=("Consolas", 11))
+        self.ip_entry.grid(row=0, column=1, padx=(0, 10))
+        self.ip_entry.insert(0, "")
+        # Placeholder hint
+        self.ip_entry.bind('<FocusIn>', self._clear_placeholder)
+        self.ip_entry.bind('<FocusOut>', self._show_placeholder)
+        self._show_placeholder(None)
 
         self.btn_check = ttk.Button(ip_frame, text="Check Printer",
                                      command=self._on_check)
         self.btn_check.grid(row=0, column=2)
 
-        # Printer info
         self.lbl_model = ttk.Label(ip_frame, text="", font=("Segoe UI", 9))
         self.lbl_model.grid(row=1, column=0, columnspan=3, pady=(5, 0))
 
-        # Status display
         status_frame = ttk.LabelFrame(main, text="Waste Ink Status", padding=10)
         status_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(0, 10))
 
-        # Main waste counter
         ttk.Label(status_frame, text="Main waste counter:").grid(row=0, column=0, sticky="w")
         self.main_bar = ttk.Progressbar(status_frame, length=250, mode='determinate')
         self.main_bar.grid(row=0, column=1, padx=10)
         self.lbl_main = ttk.Label(status_frame, text="--", width=10)
         self.lbl_main.grid(row=0, column=2)
 
-        # Borderless waste counter
         ttk.Label(status_frame, text="Borderless waste counter:").grid(row=1, column=0, sticky="w", pady=(5, 0))
         self.border_bar = ttk.Progressbar(status_frame, length=250, mode='determinate')
         self.border_bar.grid(row=1, column=1, padx=10, pady=(5, 0))
         self.lbl_border = ttk.Label(status_frame, text="--", width=10)
         self.lbl_border.grid(row=1, column=2, pady=(5, 0))
 
-        # Maintenance levels
         ttk.Label(status_frame, text="Maintenance level (1st):").grid(row=2, column=0, sticky="w", pady=(5, 0))
         self.lbl_maint1 = ttk.Label(status_frame, text="--", width=10)
         self.lbl_maint1.grid(row=2, column=2, pady=(5, 0))
@@ -258,11 +284,9 @@ class EpsonResetApp:
         self.lbl_maint2 = ttk.Label(status_frame, text="--", width=10)
         self.lbl_maint2.grid(row=3, column=2, pady=(5, 0))
 
-        # Overall status
         self.lbl_status = ttk.Label(status_frame, text="", font=("Segoe UI", 11, "bold"))
         self.lbl_status.grid(row=4, column=0, columnspan=3, pady=(10, 0))
 
-        # Buttons
         btn_frame = ttk.Frame(main)
         btn_frame.grid(row=4, column=0, columnspan=3, pady=(5, 10))
 
@@ -271,7 +295,6 @@ class EpsonResetApp:
         self.btn_reset.grid(row=0, column=0, padx=5)
         self.btn_reset.state(['disabled'])
 
-        # Log area
         log_frame = ttk.LabelFrame(main, text="Log", padding=5)
         log_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(0, 5))
 
@@ -283,22 +306,46 @@ class EpsonResetApp:
         self.log_text.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
-        # Configure text tags for colored output
         self.log_text.tag_configure('ok', foreground='#4ec9b0')
         self.log_text.tag_configure('error', foreground='#f44747')
         self.log_text.tag_configure('warn', foreground='#dcdcaa')
         self.log_text.tag_configure('info', foreground='#569cd6')
 
-        # Footer
         footer = ttk.Label(main,
                            text="Based on epson_print_conf by Ircama. "
                                 "Use at your own risk.",
                            font=("Segoe UI", 8), foreground="gray")
         footer.grid(row=6, column=0, columnspan=3)
 
+    def _show_placeholder(self, event):
+        if not self.printer_ip.get():
+            self.ip_entry.configure(foreground='gray')
+            self.printer_ip.set("e.g. 192.168.1.100")
+
+    def _clear_placeholder(self, event):
+        if self.printer_ip.get() == "e.g. 192.168.1.100":
+            self.printer_ip.set("")
+            self.ip_entry.configure(foreground='black')
+
+    def _get_ip(self):
+        """Get and validate the IP from the input field."""
+        raw = self.printer_ip.get().strip()
+        if raw == "e.g. 192.168.1.100":
+            raw = ""
+        if not raw:
+            self.log("Please enter your printer's IP address.", 'error')
+            return None
+        ip, err = validate_ip(raw)
+        if err:
+            self.log(f"Invalid IP: {err}", 'error')
+            return None
+        return ip
+
     def log(self, msg, tag=None):
         """Append message to log (thread-safe)."""
         def _append():
+            if not self.root.winfo_exists():
+                return
             self.log_text.configure(state='normal')
             if tag:
                 self.log_text.insert('end', msg + '\n', tag)
@@ -310,6 +357,8 @@ class EpsonResetApp:
 
     def _set_buttons(self, checking=False, can_reset=False):
         def _update():
+            if not self.root.winfo_exists():
+                return
             if checking:
                 self.btn_check.state(['disabled'])
                 self.btn_reset.state(['disabled'])
@@ -323,10 +372,14 @@ class EpsonResetApp:
 
     def _update_ui(self, main_pct, border_pct, maint1, maint2, is_over):
         def _update():
+            if not self.root.winfo_exists():
+                return
             self.main_bar['value'] = min(main_pct, 100)
-            self.lbl_main.configure(text=f"{main_pct:.1f}%")
+            display_main = f"{main_pct:.1f}%" if main_pct <= 100 else f"100%+ ({main_pct:.0f}%)"
+            self.lbl_main.configure(text=display_main)
             self.border_bar['value'] = min(border_pct, 100)
-            self.lbl_border.configure(text=f"{border_pct:.1f}%")
+            display_border = f"{border_pct:.1f}%" if border_pct <= 100 else f"100%+ ({border_pct:.0f}%)"
+            self.lbl_border.configure(text=display_border)
             self.lbl_maint1.configure(text=str(maint1) if maint1 is not None else "?")
             self.lbl_maint2.configure(text=str(maint2) if maint2 is not None else "?")
             if is_over:
@@ -338,55 +391,89 @@ class EpsonResetApp:
         self.root.after(0, _update)
 
     def _set_model(self, text):
-        self.root.after(0, lambda: self.lbl_model.configure(text=text))
+        def _update():
+            if self.root.winfo_exists():
+                self.lbl_model.configure(text=text)
+        self.root.after(0, _update)
 
     def _on_check(self):
-        if self.is_running:
-            return
-        self.is_running = True
+        with self._lock:
+            if self.is_running:
+                return
+            self.is_running = True
+        self.btn_check.state(['disabled'])
+        self.btn_reset.state(['disabled'])
         threading.Thread(target=self._check_thread, daemon=True).start()
 
     def _check_thread(self):
-        ip = self.printer_ip.get().strip()
-        self._set_buttons(checking=True)
-        self.log(f"Connecting to {ip}...", 'info')
+        try:
+            ip = self._get_ip()
+            if not ip:
+                self._set_buttons(checking=False, can_reset=False)
+                return
 
-        if not check_snmp_connectivity(ip):
-            self.log(f"No response from {ip}. Check IP and network.", 'error')
-            self._set_model("Not connected")
-            self._set_buttons(checking=False, can_reset=False)
-            self.is_running = False
-            return
+            self._set_buttons(checking=True)
+            self.log(f"Connecting to {ip}...", 'info')
 
-        self.log("SNMP connected!", 'ok')
+            if not check_snmp_connectivity(ip):
+                self.log(f"No response from {ip}. Check IP and network.", 'error')
+                self.log("Ensure printer is on, connected to WiFi, and "
+                         "UDP port 161 is not blocked.", 'warn')
+                self._set_model("Not connected")
+                self._set_buttons(checking=False, can_reset=False)
+                return
 
-        model = get_printer_model(ip)
-        if model:
-            self.log(f"Printer model: {model}", 'ok')
-            self._set_model(f"Connected: {model}")
-        else:
-            self.log("Could not read model name", 'warn')
-            self._set_model("Connected (unknown model)")
+            self.log("SNMP connected!", 'ok')
 
-        self.log("Reading waste ink counters...", 'info')
-        self._read_counters(ip)
-        self.is_running = False
+            model = get_printer_model(ip)
+            self._detected_model = model
+            if model:
+                self.log(f"Printer model: {model}", 'ok')
+                self._set_model(f"Connected: {model}")
+                if not is_supported_model(model):
+                    self.log(f"WARNING: {model} is not a tested model!", 'error')
+                    self.log(f"Supported: {', '.join(SUPPORTED_MODELS)}", 'warn')
+                    self.log("EEPROM addresses may differ. Reset could damage "
+                             "an unsupported printer.", 'error')
+            else:
+                self.log("Could not read model name", 'warn')
+                self._set_model("Connected (unknown model)")
+
+            self.log("Reading waste ink counters...", 'info')
+            read_ok = self._read_counters(ip)
+            can_reset = read_ok and (model is None or is_supported_model(model))
+            self._set_buttons(checking=False, can_reset=can_reset)
+        finally:
+            with self._lock:
+                self.is_running = False
 
     def _read_counters(self, ip):
-        # Read main waste counter
+        """Read and display waste ink counters. Returns True if all reads succeeded."""
+        read_failed = False
+
         main_bytes = []
         for addr in MAIN_WASTE_ADDRS:
             val = read_eeprom(ip, addr)
-            main_bytes.append(val if val is not None else 0)
-            self.log(f"  EEPROM[{addr}] = {val}", 'info')
+            if val is None:
+                self.log(f"  EEPROM[{addr}] = READ FAILED", 'error')
+                read_failed = True
+                main_bytes.append(0)
+            else:
+                main_bytes.append(val)
+                self.log(f"  EEPROM[{addr}] = {val}", 'info')
 
-        # Read borderless waste counter
         border_bytes = []
         for addr in BORDERLESS_WASTE_ADDRS:
             val = read_eeprom(ip, addr)
-            border_bytes.append(val if val is not None else 0)
-            if addr != 47:  # Don't log shared byte twice
-                self.log(f"  EEPROM[{addr}] = {val}", 'info')
+            if val is None:
+                if addr != 47:
+                    self.log(f"  EEPROM[{addr}] = READ FAILED", 'error')
+                read_failed = True
+                border_bytes.append(0)
+            else:
+                border_bytes.append(val)
+                if addr != 47:
+                    self.log(f"  EEPROM[{addr}] = {val}", 'info')
 
         main_value = main_bytes[0] + (main_bytes[1] << 8) + (main_bytes[2] << 16)
         border_value = border_bytes[0] + (border_bytes[1] << 8) + (border_bytes[2] << 16)
@@ -395,6 +482,9 @@ class EpsonResetApp:
 
         maint1 = read_eeprom(ip, 54)
         maint2 = read_eeprom(ip, 55)
+        if maint1 is None or maint2 is None:
+            self.log("  Maintenance level read failed!", 'error')
+            read_failed = True
         self.log(f"  Maintenance level 1st: {maint1}", 'info')
         self.log(f"  Maintenance level 2nd: {maint2}", 'info')
 
@@ -403,17 +493,37 @@ class EpsonResetApp:
         self.log(f"Main waste: {main_value} raw ({main_pct:.1f}%)")
         self.log(f"Borderless waste: {border_value} raw ({border_pct:.1f}%)")
 
-        if is_over:
+        if read_failed:
+            self.log("Some EEPROM reads failed. Values may be inaccurate.", 'error')
+        elif is_over:
             self.log("WASTE INK PAD IS OVER LIMIT!", 'error')
         else:
             self.log("Waste ink levels are within limits.", 'ok')
 
         self._update_ui(main_pct, border_pct, maint1, maint2, is_over)
-        self._set_buttons(checking=False, can_reset=True)
+        return not read_failed
 
     def _on_reset(self):
-        if self.is_running:
-            return
+        with self._lock:
+            if self.is_running:
+                return
+            self.is_running = True
+
+        # Model safety check
+        if self._detected_model and not is_supported_model(self._detected_model):
+            proceed = messagebox.askyesno(
+                "Unsupported Model",
+                f"Your printer ({self._detected_model}) is not in the tested "
+                f"model list ({', '.join(SUPPORTED_MODELS)}).\n\n"
+                f"EEPROM addresses may differ. Proceeding could damage your "
+                f"printer.\n\n"
+                f"Are you sure you want to continue?"
+            )
+            if not proceed:
+                with self._lock:
+                    self.is_running = False
+                return
+
         if not messagebox.askyesno(
             "Confirm Reset",
             "This will reset the waste ink pad counters to zero.\n\n"
@@ -421,53 +531,69 @@ class EpsonResetApp:
             "if it is actually full.\n\n"
             "Continue?"
         ):
+            with self._lock:
+                self.is_running = False
             return
-        self.is_running = True
+
+        self.btn_check.state(['disabled'])
+        self.btn_reset.state(['disabled'])
         threading.Thread(target=self._reset_thread, daemon=True).start()
 
     def _reset_thread(self):
-        ip = self.printer_ip.get().strip()
-        self._set_buttons(checking=True)
-        self.log("=" * 50)
-        self.log("RESETTING WASTE INK COUNTERS...", 'warn')
+        try:
+            ip = self._get_ip()
+            if not ip:
+                self._set_buttons(checking=False, can_reset=True)
+                return
 
-        success = True
-        for addr, (label, value) in WASTE_INK_ADDRS.items():
-            result = write_eeprom(ip, addr, value)
-            if result is True:
-                self.log(f"  EEPROM[{addr:3d}] = {value:3d} ... OK  ({label})", 'ok')
-            else:
-                status = "FAIL" if result is False else "NO RESPONSE"
-                self.log(f"  EEPROM[{addr:3d}] = {value:3d} ... {status}  ({label})", 'error')
-                success = False
-            time.sleep(0.2)
-
-        self.log("Verifying...", 'info')
-        time.sleep(1)
-        self._read_counters(ip)
-
-        if success:
+            self._set_buttons(checking=True)
             self.log("=" * 50)
-            self.log("RESET SUCCESSFUL!", 'ok')
-            self.log("")
-            self.log("Next steps:", 'warn')
-            self.log("  1. Turn OFF the printer (unplug power)")
-            self.log("  2. Wait 30 seconds")
-            self.log("  3. Plug back in and turn ON")
-            self.log("  4. Try printing a test page")
-            self.root.after(0, lambda: messagebox.showinfo(
-                "Reset Complete",
-                "Waste ink counters have been reset!\n\n"
-                "Please power cycle the printer:\n"
-                "1. Unplug the printer\n"
-                "2. Wait 30 seconds\n"
-                "3. Plug back in and turn on\n"
-                "4. Print a test page"
-            ))
-        else:
-            self.log("Some writes failed. Try power cycling and running again.", 'error')
+            self.log("RESETTING WASTE INK COUNTERS...", 'warn')
 
-        self.is_running = False
+            success = True
+            for addr, label, value in WASTE_INK_RESET:
+                self.log(f"  Writing EEPROM[{addr:3d}] = {value:3d} ({label})...", 'info')
+                result = write_eeprom(ip, addr, value)
+                if result is True:
+                    self.log(f"  EEPROM[{addr:3d}] = {value:3d} ... OK", 'ok')
+                else:
+                    status = "FAIL" if result is False else "NO RESPONSE"
+                    self.log(f"  EEPROM[{addr:3d}] = {value:3d} ... {status}", 'error')
+                    success = False
+                time.sleep(0.2)
+
+            self.log("Verifying...", 'info')
+            time.sleep(1)
+            self._read_counters(ip)
+
+            if success:
+                self.log("=" * 50)
+                self.log("RESET SUCCESSFUL!", 'ok')
+                self.log("")
+                self.log("Next steps:", 'warn')
+                self.log("  1. Turn OFF the printer (unplug power)")
+                self.log("  2. Wait 30 seconds")
+                self.log("  3. Plug back in and turn ON")
+                self.log("  4. Try printing a test page")
+                def _show_success():
+                    if self.root.winfo_exists():
+                        messagebox.showinfo(
+                            "Reset Complete",
+                            "Waste ink counters have been reset!\n\n"
+                            "Please power cycle the printer:\n"
+                            "1. Unplug the printer\n"
+                            "2. Wait 30 seconds\n"
+                            "3. Plug back in and turn on\n"
+                            "4. Print a test page"
+                        )
+                self.root.after(0, _show_success)
+            else:
+                self.log("Some writes failed. Try power cycling and running again.", 'error')
+
+            self._set_buttons(checking=False, can_reset=True)
+        finally:
+            with self._lock:
+                self.is_running = False
 
 
 def main():

@@ -422,7 +422,7 @@
             <div class="feature">
                 <div class="icon">&#128274;</div>
                 <h3>No Installation</h3>
-                <p>Single portable executable. Download, run, done. No admin rights needed.</p>
+                <p>Single portable executable. Download, run, done. Works on standard home networks.</p>
             </div>
             <div class="feature">
                 <div class="icon">&#128064;</div>
@@ -483,6 +483,23 @@
             <div class="answer">
                 <p>Currently tested and confirmed on the <strong>Epson ET-2720</strong>. It should also work on <strong>ET-2721</strong> and <strong>ET-2700</strong> as they share the same EEPROM layout and SNMP keys.</p>
                 <p>Other EcoTank models may use different EEPROM addresses. If you have a different model and want to help, please open an issue on GitHub.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Windows says "Windows protected your PC" — is this safe?</summary>
+            <div class="answer">
+                <p>Yes. This is Windows SmartScreen, which flags any unsigned application. The tool is open-source and you can verify the code on GitHub.</p>
+                <p>To run it: click <strong>"More info"</strong>, then click <strong>"Run anyway"</strong>.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>macOS says the app "can't be opened" — what do I do?</summary>
+            <div class="answer">
+                <p>macOS Gatekeeper blocks apps from unidentified developers by default.</p>
+                <p>To open it: <strong>Right-click</strong> (or Control-click) the app, select <strong>"Open"</strong>, then click <strong>"Open"</strong> in the dialog. You only need to do this once.</p>
+                <p>Alternatively, go to <strong>System Settings &gt; Privacy &amp; Security</strong> and click "Open Anyway" next to the blocked app message.</p>
             </div>
         </details>
 
