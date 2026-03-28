@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Epson Printer Saver — Free Waste Ink Pad Reset Tool for ET-2720, ET-2721, ET-2700</title>
+    <meta name="description" content="Free tool to reset the waste ink pad counter on Epson EcoTank ET-2720, ET-2721, and ET-2700 printers over WiFi. No USB cable, no paid software, no service visit needed.">
+    <meta name="keywords" content="Epson, waste ink pad reset, ET-2720, ET-2721, ET-2700, EcoTank, ink pad full, reset tool, free, WiFi, SNMP, printer error, service required, waste ink counter">
+    <link rel="canonical" href="https://theplanbeta.github.io/Epsonprintersaver/">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Epson Printer Saver — Free Waste Ink Pad Reset">
+    <meta property="og:description" content="Fix your Epson EcoTank 'waste ink pad full' error for free. Reset over WiFi in 30 seconds. Works with ET-2720, ET-2721, ET-2700.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://theplanbeta.github.io/Epsonprintersaver/">
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Epson Printer Saver — Free Waste Ink Pad Reset">
+    <meta name="twitter:description" content="Fix your Epson EcoTank 'waste ink pad full' error for free over WiFi.">
+
+    <!-- Schema.org structured data for LLM and search engines -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Epson Printer Saver",
+        "alternateName": "Epson Waste Ink Pad Reset Tool",
+        "description": "Free open-source tool to reset the waste ink pad counter on Epson EcoTank ET-2720, ET-2721, and ET-2700 series printers over WiFi. No USB cable needed.",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Windows, macOS, Linux",
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+        },
+        "downloadUrl": "https://github.com/theplanbeta/Epsonprintersaver/releases/latest",
+        "softwareVersion": "1.0.0",
+        "author": {
+            "@type": "Person",
+            "name": "theplanbeta"
+        },
+        "license": "https://opensource.org/licenses/MIT",
+        "isAccessibleForFree": true,
+        "featureList": [
+            "Reset waste ink pad counter over WiFi",
+            "No USB cable required",
+            "No paid software needed",
+            "GUI and command-line interfaces",
+            "Zero dependencies beyond Python standard library",
+            "Supports Epson ET-2720, ET-2721, ET-2700"
+        ]
+    }
+    </script>
+
+    <!-- FAQ structured data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": "How do I reset the waste ink pad counter on my Epson ET-2720?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Download Epson Printer Saver from GitHub, enter your printer's IP address, and click 'Reset Waste Ink Counters'. The tool communicates with your printer over WiFi using SNMP. After resetting, power cycle the printer by unplugging it for 30 seconds."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "What does 'waste ink pad full' mean on Epson printers?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Epson printers track how much ink flows into an internal absorbent pad during cleaning cycles. When the software counter exceeds a threshold, the printer displays a 'waste ink pad full' or 'service required' error and refuses to print — even if the pad isn't actually full. This is a software lock, not a hardware limitation."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "Do I need a USB cable to reset the Epson waste ink pad?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "No. Epson Printer Saver works entirely over WiFi. Your computer and printer just need to be on the same local network. The tool uses SNMP (UDP port 161) to communicate with the printer."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "Is it free to reset the Epson waste ink pad counter?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Yes. Epson Printer Saver is 100% free and open-source (MIT license). No subscriptions, no trial limits, no paid unlocks."
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "Which Epson printers does this tool support?",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "Currently tested and confirmed working on Epson ET-2720. It should also work on ET-2721 and ET-2700 as they share the same internals and EEPROM configuration. Other EcoTank models may use different addresses."
+                }
+            }
+        ]
+    }
+    </script>
+
+    <style>
+        :root {
+            --blue: #003c8f;
+            --accent: #0066cc;
+            --green: #28a745;
+            --bg: #f8f9fa;
+            --card: #ffffff;
+            --text: #222;
+            --muted: #666;
+            --radius: 12px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+            color: var(--text);
+            background: var(--bg);
+            line-height: 1.6;
+        }
+
+        /* Hero */
+        .hero {
+            background: linear-gradient(135deg, var(--blue) 0%, var(--accent) 100%);
+            color: white;
+            padding: 60px 20px;
+            text-align: center;
+        }
+        .hero h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            font-weight: 800;
+        }
+        .hero h1 span { color: #7ec8ff; }
+        .hero .tagline {
+            font-size: 1.25rem;
+            opacity: 0.9;
+            max-width: 600px;
+            margin: 0 auto 30px;
+        }
+        .hero .models {
+            font-size: 0.95rem;
+            opacity: 0.75;
+            margin-bottom: 30px;
+        }
+
+        /* Buttons */
+        .btn-group {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 14px 28px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 1.05rem;
+            font-weight: 600;
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+        }
+        .btn-windows {
+            background: #fff;
+            color: var(--blue);
+        }
+        .btn-mac {
+            background: rgba(255,255,255,0.15);
+            color: #fff;
+            border: 2px solid rgba(255,255,255,0.4);
+        }
+        .btn-source {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            border: 2px solid rgba(255,255,255,0.25);
+            font-size: 0.9rem;
+            padding: 10px 20px;
+        }
+
+        /* Container */
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* Sections */
+        section {
+            padding: 50px 0;
+        }
+        section h2 {
+            font-size: 1.8rem;
+            margin-bottom: 25px;
+            text-align: center;
+            color: var(--blue);
+        }
+
+        /* Problem section */
+        .problem {
+            background: #fff3cd;
+            border-left: 5px solid #ffc107;
+            padding: 20px 25px;
+            border-radius: 0 var(--radius) var(--radius) 0;
+            margin-bottom: 20px;
+            font-size: 1.05rem;
+        }
+        .problem strong { color: #856404; }
+
+        /* Steps */
+        .steps {
+            display: grid;
+            gap: 20px;
+            counter-reset: step;
+        }
+        .step {
+            background: var(--card);
+            border-radius: var(--radius);
+            padding: 20px 25px 20px 70px;
+            position: relative;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .step::before {
+            counter-increment: step;
+            content: counter(step);
+            position: absolute;
+            left: 20px;
+            top: 18px;
+            width: 36px;
+            height: 36px;
+            background: var(--accent);
+            color: #fff;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
+        .step h3 { font-size: 1.1rem; margin-bottom: 4px; }
+        .step p { color: var(--muted); font-size: 0.95rem; }
+
+        /* Features grid */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+        }
+        .feature {
+            background: var(--card);
+            border-radius: var(--radius);
+            padding: 25px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .feature .icon { font-size: 2rem; margin-bottom: 10px; }
+        .feature h3 { font-size: 1rem; margin-bottom: 6px; }
+        .feature p { font-size: 0.85rem; color: var(--muted); }
+
+        /* FAQ */
+        .faq-item {
+            background: var(--card);
+            border-radius: var(--radius);
+            margin-bottom: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            overflow: hidden;
+        }
+        .faq-item summary {
+            padding: 16px 20px;
+            font-weight: 600;
+            cursor: pointer;
+            list-style: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .faq-item summary::after { content: '+'; font-size: 1.3rem; color: var(--accent); }
+        .faq-item[open] summary::after { content: '-'; }
+        .faq-item .answer {
+            padding: 0 20px 16px;
+            color: var(--muted);
+            font-size: 0.95rem;
+        }
+
+        /* Coffee */
+        .coffee {
+            text-align: center;
+            padding: 40px 20px;
+            background: var(--card);
+        }
+        .coffee a {
+            display: inline-block;
+            background: #ffdd00;
+            color: #000;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 1.05rem;
+            transition: transform 0.15s;
+        }
+        .coffee a:hover { transform: scale(1.05); }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 30px;
+            color: var(--muted);
+            font-size: 0.85rem;
+        }
+        footer a { color: var(--accent); text-decoration: none; }
+
+        @media (max-width: 600px) {
+            .hero h1 { font-size: 1.8rem; }
+            .hero .tagline { font-size: 1rem; }
+            .btn { padding: 12px 20px; font-size: 0.95rem; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Hero -->
+<header class="hero">
+    <h1>Epson <span>Printer Saver</span></h1>
+    <p class="tagline">Fix the "waste ink pad full" error on your Epson EcoTank printer for free — over WiFi, in 30 seconds.</p>
+    <p class="models">Works with ET-2720 &bull; ET-2721 &bull; ET-2700</p>
+    <div class="btn-group">
+        <a href="https://github.com/theplanbeta/Epsonprintersaver/releases/latest/download/EpsonReset.exe" class="btn btn-windows">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.5L9.9 2.1V11.4H0V3.5ZM11.1 1.9L24 0V11.4H11.1V1.9ZM0 12.6H9.9V21.9L0 20.5V12.6ZM11.1 12.6H24V24L11.1 22.1V12.6Z"/></svg>
+            Download for Windows
+        </a>
+        <a href="https://github.com/theplanbeta/Epsonprintersaver/releases/latest/download/EpsonReset-macOS.zip" class="btn btn-mac">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5C17.88 20.74 17 21.95 15.66 21.97C14.32 22 13.89 21.18 12.37 21.18C10.84 21.18 10.37 21.95 9.1 22C7.79 22.05 6.8 20.68 5.96 19.47C4.25 16.56 2.93 11.3 4.7 7.72C5.57 5.94 7.36 4.86 9.28 4.83C10.56 4.81 11.78 5.7 12.57 5.7C13.36 5.7 14.85 4.63 16.4 4.8C17.07 4.83 18.91 5.09 20.07 6.78C19.95 6.86 17.62 8.23 17.65 11.1C17.68 14.53 20.59 15.62 20.63 15.63C20.59 15.73 20.13 17.33 18.71 19.5ZM13 3.5C13.73 2.67 14.94 2.04 15.94 2C16.07 3.17 15.6 4.35 14.9 5.19C14.21 6.04 13.07 6.7 11.95 6.61C11.8 5.46 12.36 4.26 13 3.5Z"/></svg>
+            Download for macOS
+        </a>
+    </div>
+    <div style="margin-top: 15px;">
+        <a href="https://github.com/theplanbeta/Epsonprintersaver" class="btn btn-source">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            Source Code
+        </a>
+    </div>
+</header>
+
+<!-- Problem -->
+<section>
+    <div class="container">
+        <h2>The Problem</h2>
+        <div class="problem">
+            <strong>Your Epson printer stopped printing?</strong> It says "waste ink pad full" or "service required"?
+            Epson charges $50+ for a service visit to reset a <em>software counter</em>.
+            The ink pad probably isn't even full — Epson just programmed the printer to stop working after a certain number of prints.
+        </div>
+        <p style="text-align:center; color: var(--muted);">This tool resets that counter in seconds. For free. Over WiFi.</p>
+    </div>
+</section>
+
+<!-- How it works -->
+<section style="background: #eef3f9;">
+    <div class="container">
+        <h2>How to Reset Your Printer</h2>
+        <div class="steps">
+            <div class="step">
+                <h3>Download & open the app</h3>
+                <p>Download for Windows or macOS above. No installation — just run it.</p>
+            </div>
+            <div class="step">
+                <h3>Enter your printer's IP address</h3>
+                <p>Find it in your printer's network settings or your router's device list. Usually something like 192.168.1.x.</p>
+            </div>
+            <div class="step">
+                <h3>Click "Check Printer"</h3>
+                <p>The tool connects over WiFi and shows your current waste ink counter levels.</p>
+            </div>
+            <div class="step">
+                <h3>Click "Reset Waste Ink Counters"</h3>
+                <p>The tool writes the reset values to the printer's EEPROM. Takes about 5 seconds.</p>
+            </div>
+            <div class="step">
+                <h3>Power cycle your printer</h3>
+                <p>Unplug the printer, wait 30 seconds, plug it back in. Done — your printer works again.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Features -->
+<section>
+    <div class="container">
+        <h2>Why Epson Printer Saver?</h2>
+        <div class="features">
+            <div class="feature">
+                <div class="icon">&#128246;</div>
+                <h3>100% Over WiFi</h3>
+                <p>No USB cable needed. Works from any computer on your network.</p>
+            </div>
+            <div class="feature">
+                <div class="icon">&#128176;</div>
+                <h3>Completely Free</h3>
+                <p>Open-source, MIT licensed. No subscriptions, no trial limits, no hidden fees.</p>
+            </div>
+            <div class="feature">
+                <div class="icon">&#9889;</div>
+                <h3>30-Second Fix</h3>
+                <p>Enter IP, click reset, power cycle. Your printer is back in action.</p>
+            </div>
+            <div class="feature">
+                <div class="icon">&#128187;</div>
+                <h3>Windows & Mac</h3>
+                <p>Pre-built downloads for both platforms. Also runs on Linux with Python.</p>
+            </div>
+            <div class="feature">
+                <div class="icon">&#128274;</div>
+                <h3>No Installation</h3>
+                <p>Single portable executable. Download, run, done. No admin rights needed.</p>
+            </div>
+            <div class="feature">
+                <div class="icon">&#128064;</div>
+                <h3>Open Source</h3>
+                <p>Full source code on GitHub. See exactly what it does. No spyware, no telemetry.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- FAQ -->
+<section style="background: #eef3f9;">
+    <div class="container">
+        <h2>Frequently Asked Questions</h2>
+
+        <details class="faq-item">
+            <summary>How do I find my Epson printer's IP address?</summary>
+            <div class="answer">
+                <p><strong>From the printer:</strong> Go to Settings &gt; Network Settings &gt; Print Network Status. The IP will be printed on the sheet.</p>
+                <p><strong>From your router:</strong> Log into your router's admin page and look for connected devices. The printer usually shows up as "EPSON" followed by a model number.</p>
+                <p><strong>From the Epson app:</strong> Open the Epson iPrint app on your phone — the printer IP is shown in the printer settings.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>What does "waste ink pad full" actually mean?</summary>
+            <div class="answer">
+                <p>During print head cleaning cycles, excess ink flows into absorbent pads inside the printer. Epson tracks this with a software counter. When the counter exceeds a threshold (maintenance level &gt; 94), the printer locks up and refuses to print.</p>
+                <p>The counter is deliberately conservative — most printers are locked long before the pads are actually saturated. This tool resets the counter back to zero.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Is this safe? Will it damage my printer?</summary>
+            <div class="answer">
+                <p>The tool only changes the waste ink counter values in the printer's EEPROM — the same values that Epson's own service tool resets. It does not modify firmware or any other settings.</p>
+                <p><strong>One caveat:</strong> if your waste ink pads are genuinely saturated (you see ink leaking from the bottom of the printer), you should clean or replace the pads before resetting the counter.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Do I need to install Python?</summary>
+            <div class="answer">
+                <p><strong>No.</strong> The Windows .exe and macOS .app downloads include everything needed. Just download and run.</p>
+                <p>If you prefer to run from source (or you're on Linux), you'll need Python 3.8+. No pip packages required — the tool uses only the Python standard library.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Does my computer need to be connected via USB?</summary>
+            <div class="answer">
+                <p><strong>No.</strong> This tool works entirely over WiFi. Your computer and printer just need to be on the same local network. The tool communicates via SNMP (UDP port 161).</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Which Epson printers are supported?</summary>
+            <div class="answer">
+                <p>Currently tested and confirmed on the <strong>Epson ET-2720</strong>. It should also work on <strong>ET-2721</strong> and <strong>ET-2700</strong> as they share the same EEPROM layout and SNMP keys.</p>
+                <p>Other EcoTank models may use different EEPROM addresses. If you have a different model and want to help, please open an issue on GitHub.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>My firewall is blocking it. What port does it use?</summary>
+            <div class="answer">
+                <p>The tool sends and receives UDP packets on <strong>port 161</strong> (SNMP). Make sure your firewall allows outbound UDP traffic to your printer's IP on port 161.</p>
+            </div>
+        </details>
+
+        <details class="faq-item">
+            <summary>Is this legal?</summary>
+            <div class="answer">
+                <p>Yes. You own your printer and have the right to repair it. This tool uses standard network protocols (SNMP) to modify settings on hardware you own. No encryption or DRM is bypassed. Right-to-repair laws in the US, EU, and Australia explicitly protect this kind of activity.</p>
+            </div>
+        </details>
+    </div>
+</section>
+
+<!-- Support / Coffee -->
+<section class="coffee">
+    <h2>Saved your printer?</h2>
+    <p style="color: var(--muted); margin-bottom: 20px;">This tool is free and always will be. If it saved you a $50+ service call, consider buying me a coffee.</p>
+    <a href="https://buymeacoffee.com/theplanbeta">Buy me a coffee</a>
+</section>
+
+<!-- Footer -->
+<footer>
+    <p>
+        <a href="https://github.com/theplanbeta/Epsonprintersaver">GitHub</a> &bull;
+        <a href="https://github.com/theplanbeta/Epsonprintersaver/releases/latest">Downloads</a> &bull;
+        <a href="https://github.com/theplanbeta/Epsonprintersaver/issues">Report a Bug</a>
+    </p>
+    <p style="margin-top: 10px;">Built with help from <a href="https://github.com/Ircama/epson_print_conf">epson_print_conf</a>. MIT License.</p>
+    <p style="margin-top: 5px;">Not affiliated with Seiko Epson Corporation.</p>
+</footer>
+
+</body>
+</html>

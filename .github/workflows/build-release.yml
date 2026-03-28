@@ -1,0 +1,72 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyinstaller
+      - run: pyinstaller --onefile --windowed --name "EpsonReset" epson_reset.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/EpsonReset.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyinstaller
+      - run: pyinstaller --onefile --windowed --name "EpsonReset" epson_reset.py
+      - run: cd dist && zip -r EpsonReset-macOS.zip EpsonReset.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: dist/EpsonReset-macOS.zip
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-exe
+          path: artifacts/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-app
+          path: artifacts/macos
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/windows/EpsonReset.exe
+            artifacts/macos/EpsonReset-macOS.zip
+          body: |
+            ## Epson EcoTank Waste Ink Pad Reset Tool
+
+            Reset waste ink pad counters on Epson ET-2720 / ET-2721 / ET-2700 series printers over WiFi.
+
+            ### Downloads
+            - **Windows:** `EpsonReset.exe` — just download and run, no installation needed
+            - **macOS:** `EpsonReset-macOS.zip` — unzip and run the .app
+
+            ### Usage
+            1. Connect to the same WiFi as your printer
+            2. Enter your printer's IP address
+            3. Click "Check Printer" to see waste ink levels
+            4. Click "Reset Waste Ink Counters" to reset
+            5. Power cycle the printer (unplug, wait 30s, plug back in)
