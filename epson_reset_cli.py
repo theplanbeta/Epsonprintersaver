@@ -69,8 +69,15 @@ def main():
     model = get_printer_model(ip)
     print(f"Printer: {model or 'Unknown'}")
 
-    # Model check
-    if model and not is_supported_model(model):
+    # Model check — block unknown AND unsupported models
+    if not model:
+        print("\nERROR: Could not identify printer model.")
+        print("Cannot verify EEPROM compatibility. Reset is not allowed "
+              "for unidentified printers.")
+        if not args.force:
+            print("Use --force to override (dangerous).")
+            sys.exit(1)
+    elif not is_supported_model(model):
         print(f"\nWARNING: {model} is not a tested model!")
         print(f"Supported: {', '.join(SUPPORTED_MODELS)}")
         print("EEPROM addresses may differ. Proceeding could damage your printer.")
@@ -111,6 +118,9 @@ def main():
         print(f"  EEPROM[{addr:3d}] = {value:3d} ... {status}  ({label})")
         if result is not True:
             success = False
+            print("\n  Write failed — aborting. Remaining addresses not modified.")
+            print("  Try power cycling the printer and running again.")
+            break
         time.sleep(0.2)
 
     print("\nVerifying...")

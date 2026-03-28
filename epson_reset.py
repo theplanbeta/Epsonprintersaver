@@ -51,6 +51,7 @@ MAINTENANCE_THRESHOLD = 94
 
 def validate_ip(ip_str):
     """Validate IP is a private IPv4 address. Returns (ip_str, error_msg)."""
+    ip_str = ip_str.strip()
     try:
         addr = ipaddress.IPv4Address(ip_str)
     except (ipaddress.AddressValueError, ValueError):
@@ -60,7 +61,7 @@ def validate_ip(ip_str):
     if addr.is_loopback:
         return None, "Loopback addresses are not allowed."
     if str(addr) in ("0.0.0.0", "255.255.255.255"):
-        return None, "Broadcast addresses are not allowed."
+        return None, "Broadcast/unspecified addresses are not allowed."
     if not addr.is_private:
         return None, (f"{addr} is a public IP. This tool is for local "
                       f"network printers only (e.g. 192.168.x.x).")
@@ -217,9 +218,17 @@ class EpsonResetApp:
         self.is_running = False
         self._lock = threading.Lock()
         self._detected_model = None
+        self._checked_ip = None  # IP that was validated during Check
+        self._cancel = False     # Cancellation flag for window close
 
         self._build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._center_window)
+
+    def _on_close(self):
+        """Handle window close — signal cancellation to running threads."""
+        self._cancel = True
+        self.root.destroy()
 
     def _center_window(self):
         self.root.update_idletasks()
@@ -249,7 +258,6 @@ class EpsonResetApp:
                                   font=("Consolas", 11))
         self.ip_entry.grid(row=0, column=1, padx=(0, 10))
         self.ip_entry.insert(0, "")
-        # Placeholder hint
         self.ip_entry.bind('<FocusIn>', self._clear_placeholder)
         self.ip_entry.bind('<FocusOut>', self._show_placeholder)
         self._show_placeholder(None)
@@ -341,6 +349,14 @@ class EpsonResetApp:
             return None
         return ip
 
+    def _set_entry_locked(self, locked):
+        """Lock/unlock the IP entry field during operations."""
+        def _update():
+            if not self.root.winfo_exists():
+                return
+            self.ip_entry.configure(state='disabled' if locked else '!disabled')
+        self.root.after(0, _update)
+
     def log(self, msg, tag=None):
         """Append message to log (thread-safe)."""
         def _append():
@@ -370,7 +386,7 @@ class EpsonResetApp:
                     self.btn_reset.state(['disabled'])
         self.root.after(0, _update)
 
-    def _update_ui(self, main_pct, border_pct, maint1, maint2, is_over):
+    def _update_ui(self, main_pct, border_pct, maint1, maint2, read_failed):
         def _update():
             if not self.root.winfo_exists():
                 return
@@ -382,7 +398,11 @@ class EpsonResetApp:
             self.lbl_border.configure(text=display_border)
             self.lbl_maint1.configure(text=str(maint1) if maint1 is not None else "?")
             self.lbl_maint2.configure(text=str(maint2) if maint2 is not None else "?")
-            if is_over:
+
+            if read_failed:
+                self.lbl_status.configure(text="UNKNOWN - Read errors occurred",
+                                          foreground="orange")
+            elif maint1 is not None and maint1 > MAINTENANCE_THRESHOLD:
                 self.lbl_status.configure(text="WASTE INK PAD FULL - NEEDS RESET",
                                           foreground="red")
             else:
@@ -403,6 +423,8 @@ class EpsonResetApp:
             self.is_running = True
         self.btn_check.state(['disabled'])
         self.btn_reset.state(['disabled'])
+        self._checked_ip = None
+        self._detected_model = None
         threading.Thread(target=self._check_thread, daemon=True).start()
 
     def _check_thread(self):
@@ -412,6 +434,7 @@ class EpsonResetApp:
                 self._set_buttons(checking=False, can_reset=False)
                 return
 
+            self._set_entry_locked(True)
             self._set_buttons(checking=True)
             self.log(f"Connecting to {ip}...", 'info')
 
@@ -421,6 +444,7 @@ class EpsonResetApp:
                          "UDP port 161 is not blocked.", 'warn')
                 self._set_model("Not connected")
                 self._set_buttons(checking=False, can_reset=False)
+                self._set_entry_locked(False)
                 return
 
             self.log("SNMP connected!", 'ok')
@@ -433,16 +457,23 @@ class EpsonResetApp:
                 if not is_supported_model(model):
                     self.log(f"WARNING: {model} is not a tested model!", 'error')
                     self.log(f"Supported: {', '.join(SUPPORTED_MODELS)}", 'warn')
-                    self.log("EEPROM addresses may differ. Reset could damage "
-                             "an unsupported printer.", 'error')
+                    self.log("EEPROM addresses may differ. Reset is disabled "
+                             "for unsupported models.", 'error')
             else:
-                self.log("Could not read model name", 'warn')
-                self._set_model("Connected (unknown model)")
+                self.log("WARNING: Could not identify printer model.", 'error')
+                self.log("Cannot verify EEPROM compatibility. Reset is disabled "
+                         "for unidentified printers.", 'error')
+                self._set_model("Connected (unknown model - reset disabled)")
 
             self.log("Reading waste ink counters...", 'info')
             read_ok = self._read_counters(ip)
-            can_reset = read_ok and (model is None or is_supported_model(model))
+
+            # Only enable reset for supported models with successful reads
+            can_reset = read_ok and is_supported_model(model)
+            if can_reset:
+                self._checked_ip = ip  # Lock in the validated IP
             self._set_buttons(checking=False, can_reset=can_reset)
+            self._set_entry_locked(False)
         finally:
             with self._lock:
                 self.is_running = False
@@ -488,19 +519,17 @@ class EpsonResetApp:
         self.log(f"  Maintenance level 1st: {maint1}", 'info')
         self.log(f"  Maintenance level 2nd: {maint2}", 'info')
 
-        is_over = (maint1 is not None and maint1 > MAINTENANCE_THRESHOLD)
-
         self.log(f"Main waste: {main_value} raw ({main_pct:.1f}%)")
         self.log(f"Borderless waste: {border_value} raw ({border_pct:.1f}%)")
 
         if read_failed:
             self.log("Some EEPROM reads failed. Values may be inaccurate.", 'error')
-        elif is_over:
+        elif maint1 is not None and maint1 > MAINTENANCE_THRESHOLD:
             self.log("WASTE INK PAD IS OVER LIMIT!", 'error')
         else:
             self.log("Waste ink levels are within limits.", 'ok')
 
-        self._update_ui(main_pct, border_pct, maint1, maint2, is_over)
+        self._update_ui(main_pct, border_pct, maint1, maint2, read_failed)
         return not read_failed
 
     def _on_reset(self):
@@ -508,21 +537,6 @@ class EpsonResetApp:
             if self.is_running:
                 return
             self.is_running = True
-
-        # Model safety check
-        if self._detected_model and not is_supported_model(self._detected_model):
-            proceed = messagebox.askyesno(
-                "Unsupported Model",
-                f"Your printer ({self._detected_model}) is not in the tested "
-                f"model list ({', '.join(SUPPORTED_MODELS)}).\n\n"
-                f"EEPROM addresses may differ. Proceeding could damage your "
-                f"printer.\n\n"
-                f"Are you sure you want to continue?"
-            )
-            if not proceed:
-                with self._lock:
-                    self.is_running = False
-                return
 
         if not messagebox.askyesno(
             "Confirm Reset",
@@ -537,13 +551,17 @@ class EpsonResetApp:
 
         self.btn_check.state(['disabled'])
         self.btn_reset.state(['disabled'])
+        self._set_entry_locked(True)
         threading.Thread(target=self._reset_thread, daemon=True).start()
 
     def _reset_thread(self):
         try:
-            ip = self._get_ip()
+            # Use the IP that was validated during Check, not current field value
+            ip = self._checked_ip
             if not ip:
-                self._set_buttons(checking=False, can_reset=True)
+                self.log("No validated printer. Run Check Printer first.", 'error')
+                self._set_buttons(checking=False, can_reset=False)
+                self._set_entry_locked(False)
                 return
 
             self._set_buttons(checking=True)
@@ -552,6 +570,11 @@ class EpsonResetApp:
 
             success = True
             for addr, label, value in WASTE_INK_RESET:
+                # Check cancellation (window closed)
+                if self._cancel:
+                    self.log("Reset cancelled.", 'warn')
+                    return
+
                 self.log(f"  Writing EEPROM[{addr:3d}] = {value:3d} ({label})...", 'info')
                 result = write_eeprom(ip, addr, value)
                 if result is True:
@@ -560,13 +583,17 @@ class EpsonResetApp:
                     status = "FAIL" if result is False else "NO RESPONSE"
                     self.log(f"  EEPROM[{addr:3d}] = {value:3d} ... {status}", 'error')
                     success = False
+                    self.log("Aborting reset — write failed. Remaining addresses "
+                             "will not be modified.", 'error')
+                    self.log("Try power cycling the printer and running again.", 'warn')
+                    break
                 time.sleep(0.2)
 
-            self.log("Verifying...", 'info')
-            time.sleep(1)
-            self._read_counters(ip)
-
             if success:
+                self.log("Verifying...", 'info')
+                time.sleep(1)
+                self._read_counters(ip)
+
                 self.log("=" * 50)
                 self.log("RESET SUCCESSFUL!", 'ok')
                 self.log("")
@@ -587,10 +614,10 @@ class EpsonResetApp:
                             "4. Print a test page"
                         )
                 self.root.after(0, _show_success)
-            else:
-                self.log("Some writes failed. Try power cycling and running again.", 'error')
 
-            self._set_buttons(checking=False, can_reset=True)
+            self._checked_ip = None  # Force re-check before next reset
+            self._set_buttons(checking=False, can_reset=False)
+            self._set_entry_locked(False)
         finally:
             with self._lock:
                 self.is_running = False
