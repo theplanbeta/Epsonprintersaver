@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://theplanbeta.github.io/Epsonprintersaver/sitemap.xml
